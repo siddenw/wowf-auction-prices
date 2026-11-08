@@ -95,8 +95,9 @@ def build(out: Path, region: str) -> None:
         "transports": travel.TRANSPORTS,
         "houses": travel.HOUSE_NODES,
         "home": travel.HOME_NODE,
+        "run": vendor.RUN_SPEED, "pathFactor": vendor.PATH_FACTOR, "maxWalk": vendor.MAX_WALK,
     })
-    _dump(data_dir / "vendor.json", {str(i): [v.price, v.lot] for i, v in vendor.items().items()})
+    shutil.copy(Path(vendor.__file__).parent / "data/vendor.json", data_dir / "vendor.json")
     _dump(data_dir / "meta.json", {"region": region, "rulesets": rulesets, "built": time.time()})
     print(f"site written to {out} ({len(items):,} items)")
 

@@ -31,7 +31,7 @@ function money(c, plain) {
 }
 
 // ---------- data ----------
-const D = { meta: null, items: new Map(), prices: {}, travel: null, fuse: null, vendor: {} };
+const D = { meta: null, items: new Map(), prices: {}, travel: null, fuse: null, vendor: { vendors: {}, items: {} } };
 
 async function getJSON(path) {
   const r = await fetch(path, { cache: "no-cache" });
@@ -69,12 +69,60 @@ function quote(id, faction, qty) {
 const usable = (f) => !S.faction || f === S.faction || f === "blackwater" || f === "vendor";
 
 // NPC vendors sell some reagents in lots (e.g. 5 Empty Vials for 20c), never run out, and are in every town.
+const VMASK = { alliance: 1, horde: 2 };
+function vendorUsable(vid) { const v = D.vendor.vendors[vid]; return v && (!S.faction || v[2] & VMASK[S.faction]); }
 function vendorQuote(id, qty) {
-  const v = D.vendor[id];
-  if (!v) return null;
+  const v = D.vendor.items[id];
+  if (!v || !v[2].some(vendorUsable)) return null;
   const [price, lot] = v, lots = Math.ceil(Math.max(qty, 1) / lot), unit = price / lot;
   return { faction: "vendor", lowest: Math.round(unit), stock: Infinity, listings: 0, total: lots * price, bought: lots * lot, market: Math.round(unit), lot };
 }
+// Nearest vendor you can use: walk straight there (if close) or fly to the flight point nearest it, then walk.
+const nearestCache = new Map();
+function vendorVisits(id) {
+  const vi = D.vendor.items[id];
+  if (!vi || !S.faction) return [];
+  const key = `${id}|${S.faction}|${myLoc()}|${rate()}`;
+  if (nearestCache.has(key)) return nearestCache.get(key);
+  const T = D.travel, src = myLoc(), loc = T.nodes[src], bit = BIT[S.faction], r = rate();
+  const nodes = Object.entries(T.nodes).filter(([, n]) => n.flags & bit);
+  const out = [];
+  for (const vid of vi[2]) {
+    if (!vendorUsable(vid)) continue;
+    const [name, title, , spawns] = D.vendor.vendors[vid];
+    let best = null;
+    for (const [map, x, y, zone, zx, zy] of spawns) {
+      const opts = [];
+      if (map === loc.continent) {
+        const d = Math.hypot(loc.x - x, loc.y - y);
+        if (d <= T.maxWalk) opts.push({ cost: 0, secs: (d * T.pathFactor) / T.run, via: [], walk: d });
+      }
+      let near = null;
+      for (const [nid, n] of nodes) if (n.continent === map) { const d = Math.hypot(n.x - x, n.y - y); if (!near || d < near[1]) near = [+nid, d]; }
+      if (near && near[0] !== src) {
+        const t = cheapestPath(src, near[0], S.faction);
+        if (t) opts.push({ cost: t.cost, secs: t.secs + (near[1] * T.pathFactor) / T.run, via: t.via, walk: near[1] });
+      }
+      for (const o of opts) {
+        const v = { ...o, vid, name, title, zone, zx, zy, map, x, y };
+        const score = (q) => (r ? tripTotal(q, r) : q.secs);
+        if (!best || score(v) < score(best)) best = v;
+      }
+    }
+    if (best) out.push(best);
+  }
+  out.sort((a, b) => (r ? tripTotal(a, r) - tripTotal(b, r) : a.secs - b.secs));
+  nearestCache.set(key, out);
+  return out;
+}
+const vLabel = (v) => `${esc(v.name)}${v.title ? ` &lt;${esc(v.title)}&gt;` : ""}`;
+const vWhere = (v) => (v.zone ? `${esc(v.zone)} ${v.zx.toFixed(1)}, ${v.zy.toFixed(1)}` : "unknown zone");
+function vHow(v) {
+  const mins = Math.max(1, Math.round(v.secs / 60));
+  if (!v.via.length) return `walk ${mins} min`;
+  return `fly ${esc(v.via.map(shortName).join(" › "))} (${money(v.cost)}), walk ${Math.round(v.walk * D.travel.pathFactor)} yd · ${mins} min`;
+}
+
 function allQuotes(id, qty) {
   const qs = FACTIONS.map((f) => quote(id, f, qty)), v = vendorQuote(id, qty);
   return v ? qs.concat(v) : qs;
@@ -221,7 +269,8 @@ function bestLowest(id) {
 function renderItem(id, qty) {
   const it = item(id), tr = trips(), r = rate();
   const quotes = allQuotes(id, qty);
-  if (tr) tr.vendor = { cost: 0, secs: 0, dest: myLoc(), via: [myLoc()] };
+  const visits = vendorVisits(id), visit = visits[0];
+  if (tr) tr.vendor = visit ? { cost: visit.cost, secs: visit.secs, dest: myLoc(), via: visit.via } : null;
   const goods = (q) => (qty > 1 ? q.total : q.lowest);
   const travelCost = (q) => (tr && tr[q.faction] ? tripTotal(tr[q.faction], r) : 0);
   const landed = (q) => goods(q) + travelCost(q);
@@ -254,7 +303,7 @@ function renderItem(id, qty) {
       <div class="total">${q.stock ? money(tr ? landed(q) : goods(q)) : "none"}</div>
       <div class="sub">${q.stock ? `${qty > 1 ? `${qty} for ${money(q.total)} · ` : ""}lowest ${money(q.lowest)} · market ${money(q.market)}` : "not listed"}</div>
       <div class="sub r">${q.faction === "vendor" ? "unlimited" : q.stock ? `${q.stock.toLocaleString()} in stock` : ""}</div>
-      ${q.faction === "vendor" ? `<div class="sub">✓ trade supplies vendors in every town</div>` : t ? `<div class="sub">${here(t) ? "✓ you're here" : `✈ ${fmtTrip(t)} to ${esc(shortName(t.dest))}`}</div>` : ""}
+      ${q.faction === "vendor" ? `<div class="sub">${visit ? `📍 ${esc(visit.name)}, ${vWhere(visit)} · ${visit.via.length ? `✈ ${money(visit.cost)} · ` : ""}${Math.max(1, Math.round(visit.secs / 60))} min` : "vendors in most towns"}</div>` : t ? `<div class="sub">${here(t) ? "✓ you're here" : `✈ ${fmtTrip(t)} to ${esc(shortName(t.dest))}`}</div>` : ""}
       ${notes.length ? `<div class="sub r">${notes.join(", ")}</div>` : t ? "<div></div>" : ""}
     </div>`;
   }
@@ -269,12 +318,19 @@ function renderItem(id, qty) {
     const ah = cands.filter((q) => q.faction !== "vendor");
     const each = `${money(vq.market)} each${vq.lot > 1 ? `, sold in ${vq.lot}s` : ""}`;
     if (best === vq) {
-      const a = ah.length ? ah.reduce((x, q) => (goods(q) < goods(x) ? q : x)) : null;
-      html += `<p class="verdict good"><b>Buy from a trade supplies vendor</b> (${each})${a && goods(a) > goods(vq) ? `. That's ${money(goods(a) - goods(vq))} less than the ${HOUSE[a.faction]}` : ""}.</p>`;
+      const land = (q) => goods(q) + travelCost(q);
+      const a = ah.length ? ah.reduce((x, q) => (land(q) < land(x) ? q : x)) : null;
+      html += `<p class="verdict good"><b>Buy from a vendor</b> (${each})${a && land(a) > land(vq) ? `. That's ${money(land(a) - land(vq))} less than the ${HOUSE[a.faction]}${tr ? ", travel included" : ""}` : ""}.</p>`;
     } else {
       html += `<p class="note">Vendors sell it too (${each}), but the AH is cheaper right now.</p>` + verdict(best, cheapest, ah, goods, travelCost, tr);
     }
   } else if (best) html += verdict(best, cheapest, cands, goods, travelCost, tr);
+  if (visits.length) {
+    html += `<details class="vendors"><summary>Nearest vendor: <b>${vLabel(visit)}</b>, ${vWhere(visit)}</summary><div class="vlist">`;
+    for (const v of visits.slice(0, 6))
+      html += `<div><b>${vLabel(v)}</b><br><span class="where">${vWhere(v)}</span> · <span class="how">${vHow(v)}</span></div>`;
+    html += `</div><p class="note">From ${esc(nodeName(myLoc()))}. NPC data from Classic (CMaNGOS), so Forever's vendors may differ.</p></details>`;
+  }
   if (it.vendor && best && best.lowest < it.vendor) html += `<p class="note warn">Listed below vendor price (${money(it.vendor)}): buy and vendor it for profit.</p>`;
   if (tr && r) html += `<p class="note">Totals include your time at ${S.timeValue}g/hour.</p>`;
   $("#result").innerHTML = html + "</div>";
@@ -342,8 +398,8 @@ function allocate(wanted, houses) {
     const ls = [];
     // [unit, units per entry, entries, house, cost per entry]
     for (const h of houses) { const b = book(id, h); for (let i = 0; i < b.length; i += 3) ls.push([b[i], b[i + 1], b[i + 2], h, b[i] * b[i + 1]]); }
-    const v = D.vendor[id];
-    if (v) ls.push([v[0] / v[1], v[1], Math.ceil(qty / v[1]), "vendor", v[0]]);
+    const v = D.vendor.items[id];
+    if (v && v[2].some(vendorUsable)) ls.push([v[0] / v[1], v[1], Math.ceil(qty / v[1]), "vendor", v[0]]);
     ls.sort((a, b) => a[0] - b[0]);
     const per = {};
     let got = 0;
@@ -394,11 +450,12 @@ function renderList() {
     html += `<div class="card"><div class="item-title"><h2>Cheapest plan</h2><b>${money(p.total)}</b></div>`;
     const order = (p.purchases.some((x) => x.house === "vendor") ? ["vendor"] : []).concat(p.trip ? Object.keys(p.trip.stops) : p.houses);
     for (const h of order) {
-      const at = h === "vendor" ? " · any town" : p.trip ? ` · ${esc(shortName(p.trip.stops[h]))}` : "";
+      const at = h === "vendor" ? " · nearest" : p.trip ? ` · ${esc(shortName(p.trip.stops[h]))}` : "";
       html += `<div class="stop"><h3>${HOUSE[h]}${at}</h3>`;
       for (const x of p.purchases.filter((x) => x.house === h)) {
         const it = item(x.id);
-        html += `<div class="line"><span><span class="q-${it.q}">${esc(it.name)}</span> ×${x.units}${x.units !== LIST[x.id] && !p.short[x.id] && order.length === 1 ? ` <span class="note">(stacks)</span>` : ""}</span><span>${money(x.cost)}</span></div>`;
+        const nv = h === "vendor" ? vendorVisits(x.id)[0] : null;
+        html += `<div class="line"><span><span class="q-${it.q}">${esc(it.name)}</span> ×${x.units}${nv ? `<br><span class="note">📍 ${esc(nv.name)}, ${vWhere(nv)}</span>` : ""}${x.units !== LIST[x.id] && !p.short[x.id] && order.length === 1 ? ` <span class="note">(stacks)</span>` : ""}</span><span>${money(x.cost)}</span></div>`;
       }
       html += `</div>`;
     }
@@ -453,6 +510,7 @@ function setTab(t) {
 
 function rerender() {
   graphCache = {};
+  nearestCache.clear();
   if (current) renderItem(current.id, current.qty);
   if (tab === "list") renderList();
 }

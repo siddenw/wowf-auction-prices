@@ -93,11 +93,22 @@ Black Pearl               1    Blackwater · Booty Bay      1           50s     
 
 Lists are saved to `~/.config/wowf/lists.json`.
 
-### Vendor reagents
+### Vendors and the nearest one to you
 
-Trade-supplies reagents (threads, dyes, vials, salt, spices, flux, rods, wood) also show a **Vendor** row, with the vendor price and no travel. Vendors are in every town and never run out. Some sell in lots: Empty Vials come 5 for 20c, so 7 vials means buying 10. The verdict says whether the vendor or the AH is cheaper, and buy lists use whichever wins for each unit.
+Anything an NPC vendor sells, such as threads, dyes, vials, spices, flux, food and water, also gets a **Vendor** row. It shows the vendor price and the trip to the **nearest vendor your faction can use**, with in-game map coordinates:
 
-The Blizzard API sets a vendor buy price on every item, drops included, so it can't tell which items vendors actually sell. The list is curated in `scripts/build_vendor.py`, and prices come from the API. Regenerate it with `uv run python scripts/build_vendor.py`.
+```
+★    Vendor     10c   unlimited   here   10c
+  Buy from a vendor (10c each): 7c cheaper than the Horde AH.
+  Nearest vendor: Shimra <General Trade Goods Merchant>, Orgrimmar 47.9, 80.3 (walk 1 min)
+```
+
+- In interactive mode, `/vendors empty vial` lists the closest vendors with coordinates and how to get there. From Kargath, for example, it suggests flying to Hammerfall (6s 30c) and walking 48 yd to Keena <Trade Goods> at Arathi Highlands 74.1, 32.7.
+- "Nearest" means quickest to reach. You either walk if the vendor is within about 1,200 yd, or fly to the flight point closest to the vendor and walk from there. If you've set a time value, the flight cost counts too.
+- Vendors sell in lots: Empty Vials come 5 for 20c, so 7 vials means buying 10. Buy lists use vendors wherever they beat the AH and show the nearest vendor for each item.
+- On the website, tap "Nearest vendor" for the six closest.
+
+The Blizzard API has no NPC or vendor data, so this comes from [CMaNGOS classic-db](https://github.com/cmangos/classic-db) (GPL-3.0): who sells what, unlimited-stock items only, plus each NPC's spawn points and faction. It covers 1,169 items from 865 vendors. Classic Era map tables from wago.tools convert spawns into zone coordinates. It's Classic data, so Forever's new zones and any changed vendors aren't covered. Rebuild it with `uv run python scripts/build_vendor.py`. Licences are listed in `src/wowf/data/NOTICE.md`.
 
 **Columns:**
 - **Lowest** is the cheapest single unit.

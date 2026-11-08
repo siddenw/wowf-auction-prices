@@ -99,6 +99,12 @@ details.more[open] summary { margin-bottom: 10px; }
 .stop h3 { font-size: 14px; margin: 0 0 4px; }
 .stop .line { display: flex; justify-content: space-between; gap: 10px; font-size: 14px; padding: 3px 0; }
 .empty { color: var(--muted); text-align: center; padding: 18px 0; }
+details.vendors { margin: 10px 2px 0; font-size: 14px; }
+details.vendors summary { cursor: pointer; }
+details.vendors .vlist { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+details.vendors .vlist div { padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; }
+details.vendors .where { font-variant-numeric: tabular-nums; }
+details.vendors .how { color: var(--muted); }
 .alts { margin-top: 10px; font-size: 13px; color: var(--muted); }
 .alts div { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
 footer { color: var(--muted); font-size: 12px; margin-top: 18px; text-align: center; }
@@ -154,7 +160,8 @@ footer a { color: inherit; }
 
   <footer>
     Live Blizzard auction data, refreshed hourly. Flight costs from Classic Era, so Forever may differ.<br>
-    Blackwater (neutral) auctioneers assumed in Booty Bay, Gadgetzan and Everlook.
+    Blackwater (neutral) auctioneers assumed in Booty Bay, Gadgetzan and Everlook.<br>
+    Vendor data from <a href="https://github.com/cmangos/classic-db">CMaNGOS classic-db</a> (GPL-3.0).
   </footer>
 </main>
 <div class="toast" id="toast"></div>
