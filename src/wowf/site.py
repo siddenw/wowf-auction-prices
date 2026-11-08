@@ -19,7 +19,7 @@ from collections import Counter
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-from . import travel
+from . import travel, vendor
 from .api import Blizzard
 from .catalog import Catalog
 from .config import MARKET_LABELS, REGION_MARKETS
@@ -77,6 +77,8 @@ def build(out: Path, region: str) -> None:
 
     # Item names for everything listed on any ruleset: id -> [name, quality, vendor, listings]
     items = {}
+    for i in vendor.items():  # vendor reagents are searchable even when nobody lists them
+        listed.setdefault(i, 0)
     for i, n in listed.items():
         it = cat.get(i)
         items[str(i)] = [it.name, it.quality[:1] if it.quality else "C", it.vendor, n]
@@ -93,7 +95,9 @@ def build(out: Path, region: str) -> None:
         "transports": travel.TRANSPORTS,
         "houses": travel.HOUSE_NODES,
         "home": travel.HOME_NODE,
+        "run": vendor.RUN_SPEED, "pathFactor": vendor.PATH_FACTOR, "maxWalk": vendor.MAX_WALK,
     })
+    shutil.copy(Path(vendor.__file__).parent / "data/vendor.json", data_dir / "vendor.json")
     _dump(data_dir / "meta.json", {"region": region, "rulesets": rulesets, "built": time.time()})
     print(f"site written to {out} ({len(items):,} items)")
 

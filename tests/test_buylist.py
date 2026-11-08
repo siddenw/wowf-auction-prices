@@ -39,3 +39,21 @@ def test_plans_that_get_everything_rank_first():
     m = FakeMarket({"horde": {CLOTH: [(1, 5)]}, "blackwater": {CLOTH: [(100, 50)]}})
     best = buylist.plan(m, {CLOTH: 50}, ["horde", "blackwater"], "horde", ORG)[0]
     assert sum(best.short.values()) == 0
+
+
+VIAL = 3371  # Empty Vial: vendor sells 5 for 20c (4c each)
+
+
+def test_vendor_beats_ah_and_sells_in_lots():
+    m = FakeMarket({"horde": {VIAL: [(6, 100)]}, "blackwater": {}})
+    best = buylist.plan(m, {VIAL: 7}, ["horde", "blackwater"], "horde", ORG)[0]
+    assert best.houses == ()  # vendors only, no AH trip
+    (p,) = best.purchases
+    assert (p.house, p.units, p.cost) == ("vendor", 10, 40)  # two lots of 5
+
+
+def test_cheap_ah_listings_used_before_vendor():
+    m = FakeMarket({"horde": {VIAL: [(2, 3)]}, "blackwater": {}})
+    purchases, short = buylist.allocate(m, {VIAL: 7}, ("horde",))
+    got = {p.house: (p.units, p.cost) for p in purchases}
+    assert got == {"horde": (3, 6), "vendor": (5, 20)} and not short

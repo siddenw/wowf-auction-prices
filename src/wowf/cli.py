@@ -32,13 +32,14 @@ from .config import (
     FACTIONS, MARKET_LABELS, MARKETS, REGION_MARKETS, REGIONS, Settings,
     normalise_faction, normalise_region, normalise_ruleset,
 )
-from . import buylist
+from . import buylist, vendor
 from . import travel as travel_mod
 from .market import SELLER_CUT, Market, Quote
 
 console = Console(highlight=False)
 REFRESH_AFTER = 300  # seconds before re-checking Blizzard for new hourly data
-HOUSE_LABEL = {"alliance": "Alliance AH", "horde": "Horde AH", "blackwater": "Blackwater (neutral)"}
+HOUSE_LABEL = {"alliance": "Alliance AH", "horde": "Horde AH", "blackwater": "Blackwater (neutral)", "vendor": "Vendor"}
+VENDOR_STOCK = 10**9  # vendors never run out
 QTY_RE = [re.compile(r"^(\d+)\s*x?\s+(.+)$", re.I), re.compile(r"^(.+?)\s+x\s*(\d+)$", re.I)]
 
 
@@ -51,6 +52,32 @@ def parse_qty(text: str) -> tuple[int, str]:
     if m:
         return max(1, int(m.group(2))), m.group(1)
     return 1, text
+
+
+def vendor_quote(item_id: int, qty: int, faction: str | None = None) -> Quote | None:
+    """A Quote for buying from an NPC vendor, or None if no vendor you can use sells it."""
+    v = vendor.get(item_id)
+    if v is None:
+        return None
+    if faction and not any(vendor.vendor(vid).mask & vendor.FACTION_MASK[faction] for vid in v.vendors):
+        return None
+    total, bought = v.cost(qty)
+    return Quote("vendor", round(v.unit), VENDOR_STOCK, 0, total, bought, round(v.unit), 0)
+
+
+def all_quotes(m: Market, item_id: int, qty: int = 1, faction: str | None = None) -> list[Quote]:
+    quotes = m.quotes(item_id, qty)
+    vq = vendor_quote(item_id, qty, faction)
+    return quotes + [vq] if vq else quotes
+
+
+def fmt_visit(v: "vendor.Visit", rich: bool = True) -> str:
+    """How to reach a vendor: 'walk 1 min' or 'fly Kargath > Hammerfall (6s 30c), walk 37 yd · 4 min'."""
+    mins = max(1, round(v.minutes))
+    if not v.via:
+        return f"walk {mins} min"
+    route = " > ".join(travel_mod.short_name(n) for n in v.via)
+    return f"fly {route} ({money.fmt(v.cost, rich)}), walk {v.walk_yards * vendor.PATH_FACTOR:.0f} yd · {mins} min"
 
 
 def fmt_trip(trip) -> str:
@@ -176,15 +203,18 @@ class App:
         for col, just in (("Item", "left"), ("Want", "right"), ("Buy at", "left"), ("Units", "right"),
                           ("Cost", "right"), ("Each", "right")):
             t.add_column(col, justify=just)
-        order = list(best.trip.stops) if best.trip else list(best.houses)
         by_house = best.by_house()
+        order = (["vendor"] if "vendor" in by_house else []) + (list(best.trip.stops) if best.trip else list(best.houses))
         for h in order:
-            where = h.capitalize()
+            where = "Vendor" if h == "vendor" else h.capitalize()
             if best.trip and best.trip.stops.get(h) is not None:
                 where += f" · {travel_mod.short_name(best.trip.stops[h])}"
             for p in by_house.get(h, []):
                 it = self.catalog.get(p.item_id)
-                t.add_row(f"[{it.style}]{it.name}[/]", str(bl.items[p.item_id]), where, f"{p.units:,}",
+                at = where
+                if h == "vendor" and (v := self.vendor_visit(p.item_id)):
+                    at = f"Vendor · {v.vendor.name}, {v.spawn.where}"
+                t.add_row(f"[{it.style}]{it.name}[/]", str(bl.items[p.item_id]), at, f"{p.units:,}",
                           money.fmt(p.cost), money.fmt(p.cost / p.units))
         bought = {p.item_id for p in best.purchases}
         for item_id, qty in bl.items.items():
@@ -214,7 +244,7 @@ class App:
             if local:
                 saved = local[0].total - best.total
                 console.print(f"  [green]The trip is worth it:[/] saves [bold]{money.fmt(saved)}[/] vs buying "
-                              f"everything at {' + '.join(HOUSE_LABEL[h] for h in local[0].houses)}.")
+                              f"everything at {' + '.join(HOUSE_LABEL[h] for h in local[0].houses) or 'vendors'}.")
             console.print(f"  [dim]Route: {' > '.join(travel_mod.short_name(n) for n in best.trip.via)}"
                           f"{' (round trip)' if s.round_trip else ', then hearth back'}[/]")
         elif best.trip:
@@ -225,9 +255,39 @@ class App:
             for p in plans[1:4]:
                 diff = p.total - best.total
                 extra = f", {sum(p.short.values())} short" if sum(p.short.values()) > sum(best.short.values()) else ""
-                console.print(f"  [dim]  {' + '.join(HOUSE_LABEL[h] for h in p.houses):40} {money.fmt(p.total, rich=False):>14}"
+                console.print(f"  [dim]  {' + '.join(HOUSE_LABEL[h] for h in p.houses) or 'Vendors only':40} {money.fmt(p.total, rich=False):>14}"
                               f"  (+{money.fmt(diff, rich=False)}{extra}){'  · ' + trip_txt(p).replace('[green]', '').replace('[/]', '') if p.trip else ''}[/]")
         console.print(f"  [dim]{self.freshness()}[/]")
+
+    def vendor_visit(self, item_id: int):
+        """Nearest vendor you can use that sells item_id (None without a faction or a vendor)."""
+        if not self.settings.faction or not vendor.get(item_id):
+            return None
+        return vendor.nearest(item_id, self.settings.faction, self.location(), self.settings.time_value)
+
+    def show_vendors(self, query: str, limit: int = 6) -> None:
+        item, _ = self.resolve(query)
+        if item is None:
+            console.print(f"[red]No item matches[/] {query!r}.")
+            return
+        vi = vendor.get(item.id)
+        if vi is None:
+            console.print(f"[{item.style}]{item.name}[/] isn't sold by any vendor (in Classic data).")
+            return
+        if not self.settings.faction:
+            console.print("[yellow]Set your faction to find vendors you can use: /faction horde[/]")
+            return
+        vs = vendor.visits(item.id, self.settings.faction, self.location(), self.settings.time_value)
+        each = f"{money.fmt(vi.unit)} each" + (f", sold in {vi.lot}s" if vi.lot > 1 else "")
+        console.print(f"\n[bold {item.style}]{item.name}[/]  [dim]#{item.id}[/]  {each}  ·  {len(vs)} vendors you can use")
+        t = Table(box=None, pad_edge=False, padding=(0, 2), header_style="bold dim")
+        for col in ("Vendor", "Where", "Getting there"):
+            t.add_column(col)
+        for v in vs[:limit]:
+            t.add_row(v.vendor.label, v.spawn.where, fmt_visit(v))
+        console.print(t)
+        console.print(f"  [dim]From {travel_mod.node_name(self.location())}. NPC data from Classic "
+                      "(CMaNGOS), so Forever's vendors may differ.[/]")
 
     def show_travel(self) -> None:
         trips = self.trips()
@@ -251,7 +311,7 @@ class App:
 
     def usable(self, faction: str) -> bool:
         mine = self.settings.faction
-        return mine is None or faction in (mine, "blackwater")
+        return mine is None or faction in (mine, "blackwater", "vendor")
 
     # -- actions ------------------------------------------------------------
     def resolve(self, query: str) -> tuple[Item | None, list[Item]]:
@@ -275,7 +335,7 @@ class App:
 
     def show_item(self, item: Item, qty: int) -> None:
         m = self.market
-        quotes = m.quotes(item.id, qty)
+        quotes = all_quotes(m, item.id, qty, self.settings.faction)
         title = Text.assemble((item.name, f"bold {item.style}"), (f"  #{item.id}", "dim"))
         if qty > 1:
             title.append(f"  ×{qty}", "bold")
@@ -288,6 +348,9 @@ class App:
             return
 
         trips = self.trips()
+        visit = self.vendor_visit(item.id)
+        if trips is not None:
+            trips = {**trips, "vendor": visit.as_trip(self.location()) if visit else None}
         rate = self.settings.time_value
 
         def goods(q: Quote) -> float:
@@ -334,7 +397,7 @@ class App:
                 notes.append(f"{q.bid_only} bid-only")
             if qty > 1 and q.stock and q.bought < qty:
                 notes.append(f"only {q.stock}")
-            elif qty > 1 and q.bought > qty:
+            elif qty > 1 and q.bought > qty and q.faction != "vendor":
                 notes.append(f"{q.bought} in stacks")
             row = [
                 "[green]★[/]" if q is best else "",
@@ -344,12 +407,22 @@ class App:
             ]
             if qty > 1:
                 row.append(money.fmt(q.total))
-            row.append(f"{q.stock:,}" if q.stock else "[dim]none[/]")
+            if q.faction == "vendor":
+                row.append("unlimited")
+                lot = vendor.get(item.id).lot
+                if lot > 1:
+                    notes.append(f"sold in {lot}s")
+            else:
+                row.append(f"{q.stock:,}" if q.stock else "[dim]none[/]")
             if trips:
                 if not usable:
                     row += ["", ""]
                 elif trip is None:
                     row += ["[dim]no route[/]", ""]
+                elif q.faction == "vendor":
+                    row += ["here" if not visit.via and visit.minutes < 1 else
+                            (f"walk {max(1, round(visit.minutes))}m" if not visit.via else fmt_trip(trip)),
+                            money.fmt(landed(q))]
                 else:
                     row += [fmt_trip(trip), money.fmt(landed(q)) if q.stock else ""]
             row.append(", ".join(notes))
@@ -362,13 +435,32 @@ class App:
             console.print(f"  [dim]Total includes your time at {money.fmt(self.settings.time_value)}/h.[/]")
 
         if best is not None:
-            self._verdict(best, cheapest, candidates, goods, travel, trips, qty)
+            self._verdict(best, cheapest, candidates, goods, travel, trips, qty, item.id)
+        if visit is not None:
+            console.print(f"  Nearest vendor: [bold]{visit.vendor.label}[/], {visit.spawn.where} "
+                          f"[dim]({fmt_visit(visit)})[/]")
         if item.vendor and best is not None and best.lowest is not None and best.lowest < item.vendor:
             console.print(f"  [yellow]Cheaper than vendor price ({money.fmt(item.vendor)})[/]: buy and vendor it for profit.")
         console.print(f"  [dim]{self.freshness()}[/]")
 
-    def _verdict(self, best, cheapest, candidates, goods, travel, trips, qty) -> None:
+    def _verdict(self, best, cheapest, candidates, goods, travel, trips, qty, item_id: int) -> None:
         here = HOUSE_LABEL[best.faction]
+        vq = next((q for q in candidates if q.faction == "vendor"), None)
+        if vq is not None:
+            v = vendor.get(item_id)
+            ah = [q for q in candidates if q.faction != "vendor"]
+            each = f"{money.fmt(v.unit)} each" + (f", sold in {v.lot}s" if v.lot > 1 else "")
+            if best is vq:
+                msg = f"  [green]Buy from a vendor[/] ({each})"
+                if ah:
+                    land = lambda q: goods(q) + travel(q)  # noqa: E731
+                    a = min(ah, key=land)
+                    if land(a) > land(vq):
+                        msg += (f": {money.fmt(land(a) - land(vq))} cheaper than the {HOUSE_LABEL[a.faction]}"
+                                + (", travel included" if trips else ""))
+                console.print(msg + ".")
+                return
+            console.print(f"  [dim]Vendors sell it too ({each}), but the AH is cheaper right now.[/]")
         if not trips:
             others = [q for q in candidates if q is not best]
             msg = f"  [green]Best: {here}[/]"
@@ -429,13 +521,13 @@ class App:
         for col, just in (("ID", "right"), ("Item", "left"), ("Cheapest", "right"), ("Where", "left"), ("Stock", "right")):
             t.add_column(col, justify=just)
         for it in hits:
-            quotes = [q for q in m.quotes(it.id) if q.stock and self.usable(q.faction)]
+            quotes = [q for q in all_quotes(m, it.id, self.settings.faction) if q.stock and self.usable(q.faction)]
             best = min(quotes, key=lambda q: q.lowest, default=None)
             t.add_row(
                 str(it.id), f"[{it.style}]{it.name}[/]",
                 money.fmt(best.lowest) if best else "[dim]-[/]",
                 HOUSE_LABEL[best.faction] if best else "[dim]not listed[/]",
-                f"{sum(q.stock for q in quotes):,}" if quotes else "",
+                ("unlimited" if any(q.faction == "vendor" for q in quotes) else f"{sum(q.stock for q in quotes):,}") if quotes else "",
             )
         console.print(t)
 
@@ -495,6 +587,7 @@ class App:
 SHELL_HELP = """[bold]Type an item name[/] (typos fine, Tab/arrows pick a suggestion). Prefix a number to price a quantity: [bold]40 linen cloth[/]
 [bold]Buy list[/]: /add 20 linen cloth · /rm linen (or /rm 5 linen) · /list shows the cheapest plan incl. travel
   /clear             empty the list        /use <name>     switch list (/lists shows all)
+  /vendors <item>    nearest vendors that sell it, with map coordinates
   /search <text>     list matches          /houses         market overview
   /at <place>        where you are         /travel         trip cost to each house
   /time 20g          value of your time/h  /return hearth|fly
@@ -513,7 +606,7 @@ def shell(app: App) -> None:
     from prompt_toolkit.completion import Completer, Completion
     from prompt_toolkit.history import FileHistory
 
-    commands = ["/add", "/rm", "/list", "/clear", "/use", "/lists", "/search", "/houses", "/at", "/travel",
+    commands = ["/vendors", "/add", "/rm", "/list", "/clear", "/use", "/lists", "/search", "/houses", "/at", "/travel",
                 "/time", "/return", "/region", "/ruleset", "/faction", "/config", "/refresh", "/help", "/quit"]
 
     class ItemCompleter(Completer):
@@ -555,7 +648,7 @@ def shell(app: App) -> None:
                     _, query = parse_qty(arg)
                     if not query.strip() or query.strip().isdigit():
                         return
-                elif cmd == "/search":
+                elif cmd in ("/search", "/vendors"):
                     query = arg
                 else:
                     return
@@ -568,7 +661,7 @@ def shell(app: App) -> None:
             for it in app.catalog.search(query, limit=10, listed=listed):
                 meta = ""
                 if m:
-                    lows = [q.lowest for q in m.quotes(it.id) if q.lowest and app.usable(q.faction)]
+                    lows = [q.lowest for q in all_quotes(m, it.id, app.settings.faction) if q.lowest and app.usable(q.faction)]
                     meta = money.fmt(min(lows), rich=False) if lows else "not listed"
                 yield Completion(
                     it.name, -len(query), display=it.name, display_meta=meta,
@@ -612,6 +705,8 @@ def shell(app: App) -> None:
                         app._market.loaded_at = 0
                     _ = app.market
                     console.print(f"[green]Up to date.[/] [dim]{app.freshness()}[/]")
+                elif cmd in ("/vendors", "/vendor", "/v"):
+                    app.show_vendors(arg) if arg else console.print("Usage: /vendors empty vial")
                 elif cmd == "/add":
                     app.list_add(arg) if arg else console.print("Usage: /add 20 linen cloth")
                     if arg:

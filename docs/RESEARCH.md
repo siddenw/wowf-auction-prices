@@ -110,3 +110,35 @@ Calls used client credentials and a token valid for 24h. Everything below was ob
 - **The default market is EU Normal**: houses 111 (Alliance), 114 (Horde) and 117 (Blackwater). EU uses the same house IDs as US. Distinct items in EU house 111 come to 3,660, against ForeverMastery's 3,614-3,640 for EU Normal Alliance.
 - **Prices are pulled live when the user searches, with no hourly ingest job.** One EU Normal search makes 6 requests (3 houses × item and commodity feeds). Gzipped, that's about 2.2 MB in total and 0.2-0.5 s per request, so under about 1.5 s in sequence and about 0.5 s in parallel. Each feed is cached in memory with its `Last-Modified`. The next search sends `If-Modified-Since` and gets a **304** (no body) until Blizzard's hourly refresh, at about :12 past the hour on EU.
 - An hourly ingest only becomes worthwhile for price *history* or trends, which aren't in scope yet.
+
+## 9. Full API survey (2026-11-08, EU, client credentials)
+I probed every standard WoW Game Data endpoint against the Forever namespaces.
+
+### Works (static-forever)
+| Area | Endpoints | Notes |
+|---|---|---|
+| **Professions & recipes** | `profession/index`, `profession/{id}`, `profession/{id}/skill-tier/{tier}`, `recipe/{id}`, `media/recipe/{id}` | **2,493 recipes** across 12 professions (one skill tier each). Each recipe gives `crafted_item`, `crafted_quantity` and `reagents[{reagent{id,name}, quantity}]`, plus `rank` and `description`. Tailoring has 471, LW 592, BS 507, Eng 275, Ench 262, Alch 196, Cooking 132 and First Aid 32. There are **589 distinct reagents**, and 376 of them were listed on EU Normal at the time of checking. |
+| Items | `item/{id}`, `search/item`, `media/item/{id}`, `item-class/index`, `item-set/index` | `media/item` gives icon URLs (`render.worldofwarcraft.com/forever-eu/icons/56/{fileDataId}.jpg`). `purchase_price` is set on **every** item, drops included (Linen Cloth has 55c), so it **can't tell us whether a vendor sells something**. |
+| Creatures | `creature/{id}`, `search/creature`, `creature-family/index`, `creature-type/index` | No vendor inventories or spawn locations. |
+| Quests | `quest/{id}`, `quest/area/index` (139), `quest/category/index`, `quest/type/index` | It includes dev/test junk ("The Chow Quest… NEW TEST AGAIN"). |
+| Collections | `mount/index` (141), `pet/index` (110), `toy/index` (13), `title/index` (41) | |
+| Characters & classes | `playable-class/race/specialization`, `talent/index` (652), `talent-tree/index` | Forever has talent trees for 27 specs. |
+| Other | `achievement-category/index`, `achievement/index` (176), `reputation-faction/index` (56), `guild-crest/index`, `modified-crafting/index` | |
+| Empty (200 with no data) | azerite, covenant, heirloom, journal-*, keystone-affix, pet-ability, pvp-talent, pvp-tier, tech-talent-tree | |
+
+### Works (dynamic-forever)
+`ruleset/index`, `ruleset/{id}`, `ruleset/{id}/auctions/…` (see §7), `region/index` and `mythic-keystone/index`. The keystone index only has links, and its season and period routes are 404.
+
+### Doesn't work (404)
+`achievement/{id}`, `spell/{id}`, `media/spell`, `media/achievement` (the indexes work but the details don't); `realm`, `connected-realm`, `token`, `pvp-season`, the mythic raid leaderboard and `decor`.
+
+### Profile (profile-forever)
+- **Character endpoints:** `/profile/wow/character/{name}-{surname}` and its sub-resources (equipment, professions and so on) work for real characters (level 10+, after logout), according to community reports. An unknown character returns 404. We still need a real character name to test against.
+- **Not tested yet:** the user-authorised endpoints (`/profile/user/wow` and protected-character). In retail, protected-character includes the character's **position (zone/map/x,y), money and bind location**. If Forever supports it, that would let us read the character's location automatically. It needs a user OAuth (authorization-code) login with the `wow.profile` scope.
+
+### What this means for the project
+- **Recipe breakdown (mega stretch) is now feasible with official data:** recipe → reagents (recursive through crafted intermediates such as bars and bolts) → priced against the AH.
+- **Vendor-sold reagents** (threads, vials, spices, flux) are needed in recipes, but the API can't say which items vendors sell. We need a small curated list, or we use the AH price and treat a very low `purchase_price` as a hint.
+- **Character professions** (`…/professions`) can show which recipes a character knows, once a real character has been tested.
+- **Bag/bank inventory isn't in the API.** It still needs an addon export.
+- **Icons** for the website are available from `media/item`.
