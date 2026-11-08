@@ -1,0 +1,41 @@
+from wowf import buylist, travel
+from wowf.market import House
+
+
+class FakeMarket:
+    def __init__(self, books):
+        self.houses = {f: House(f, 0, None, {i: sorted(b) for i, b in items.items()}) for f, items in books.items()}
+
+
+ORG = travel.find_node("org", "horde")
+CLOTH, PEARL = 1, 2
+
+
+def test_allocate_splits_across_houses_and_reports_shortfall():
+    m = FakeMarket({"horde": {CLOTH: [(20, 10)]}, "blackwater": {CLOTH: [(10, 5)]}})
+    purchases, short = buylist.allocate(m, {CLOTH: 12}, ("horde", "blackwater"))
+    got = {p.house: (p.units, p.cost) for p in purchases}
+    assert got == {"blackwater": (5, 50), "horde": (10, 200)}
+    assert short == {}
+    _, short = buylist.allocate(m, {CLOTH: 30}, ("horde",))
+    assert short == {CLOTH: 20}
+
+
+def test_trip_only_when_savings_beat_travel():
+    # Pearl is 2g cheaper at Blackwater: worth a ~2s trip.
+    m = FakeMarket({"horde": {CLOTH: [(20, 100)], PEARL: [(30000, 1)]},
+                    "blackwater": {CLOTH: [(25, 100)], PEARL: [(10000, 1)]}})
+    best = buylist.plan(m, {CLOTH: 50, PEARL: 1}, ["horde", "blackwater"], "horde", ORG)[0]
+    assert best.houses == ("horde", "blackwater")
+    assert {p.item_id: p.house for p in best.purchases} == {CLOTH: "horde", PEARL: "blackwater"}
+
+    # Only 1c cheaper: stay home.
+    m = FakeMarket({"horde": {PEARL: [(10001, 1)]}, "blackwater": {PEARL: [(10000, 1)]}})
+    best = buylist.plan(m, {PEARL: 1}, ["horde", "blackwater"], "horde", ORG)[0]
+    assert best.houses == ("horde",) and best.trip.cost == 0
+
+
+def test_plans_that_get_everything_rank_first():
+    m = FakeMarket({"horde": {CLOTH: [(1, 5)]}, "blackwater": {CLOTH: [(100, 50)]}})
+    best = buylist.plan(m, {CLOTH: 50}, ["horde", "blackwater"], "horde", ORG)[0]
+    assert sum(best.short.values()) == 0

@@ -1,0 +1,53 @@
+name: Publish prices
+
+on:
+  schedule:
+    - cron: "20 * * * *" # Blizzard refreshes EU around :12 past the hour
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - id: week
+        run: echo "w=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Cache item catalogue (names only, no credentials)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/wowf/items-*.json.gz
+          key: wowf-items-${{ steps.week.outputs.w }}
+          restore-keys: wowf-items-
+      - name: Build site with fresh prices
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+          WOWF_REGION: eu
+        run: uv run wowf-site _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
