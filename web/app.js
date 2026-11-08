@@ -2,7 +2,7 @@
 // WoW Forever AH prices, the browser version. Data in data/*.json is rebuilt hourly by GitHub Actions.
 
 const FACTIONS = ["alliance", "horde", "blackwater"];
-const HOUSE = { alliance: "Alliance AH", horde: "Horde AH", blackwater: "Blackwater (neutral)" };
+const HOUSE = { alliance: "Alliance AH", horde: "Horde AH", blackwater: "Blackwater (neutral)", vendor: "Vendor" };
 const BIT = { alliance: 1, horde: 2 };
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -31,7 +31,7 @@ function money(c, plain) {
 }
 
 // ---------- data ----------
-const D = { meta: null, items: new Map(), prices: {}, travel: null, fuse: null };
+const D = { meta: null, items: new Map(), prices: {}, travel: null, fuse: null, vendor: {} };
 
 async function getJSON(path) {
   const r = await fetch(path, { cache: "no-cache" });
@@ -66,7 +66,19 @@ function quote(id, faction, qty) {
   return { faction, lowest: b.length ? b[0] : null, stock, listings, total: b.length ? total : null, bought, market: got ? sum / got : null };
 }
 
-const usable = (f) => !S.faction || f === S.faction || f === "blackwater";
+const usable = (f) => !S.faction || f === S.faction || f === "blackwater" || f === "vendor";
+
+// NPC vendors sell some reagents in lots (e.g. 5 Empty Vials for 20c), never run out, and are in every town.
+function vendorQuote(id, qty) {
+  const v = D.vendor[id];
+  if (!v) return null;
+  const [price, lot] = v, lots = Math.ceil(Math.max(qty, 1) / lot), unit = price / lot;
+  return { faction: "vendor", lowest: Math.round(unit), stock: Infinity, listings: 0, total: lots * price, bought: lots * lot, market: Math.round(unit), lot };
+}
+function allQuotes(id, qty) {
+  const qs = FACTIONS.map((f) => quote(id, f, qty)), v = vendorQuote(id, qty);
+  return v ? qs.concat(v) : qs;
+}
 
 // ---------- travel ----------
 let graphCache = {};
@@ -200,13 +212,16 @@ function search(q, limit = 8) {
 function bestLowest(id) {
   let best = null;
   for (const f of FACTIONS) if (usable(f)) { const b = book(id, f); if (b.length && (best == null || b[0] < best)) best = b[0]; }
+  const v = vendorQuote(id, 1);
+  if (v && (best == null || v.lowest < best)) best = v.lowest;
   return best;
 }
 
 // ---------- price view ----------
 function renderItem(id, qty) {
   const it = item(id), tr = trips(), r = rate();
-  const quotes = FACTIONS.map((f) => quote(id, f, qty));
+  const quotes = allQuotes(id, qty);
+  if (tr) tr.vendor = { cost: 0, secs: 0, dest: myLoc(), via: [myLoc()] };
   const goods = (q) => (qty > 1 ? q.total : q.lowest);
   const travelCost = (q) => (tr && tr[q.faction] ? tripTotal(tr[q.faction], r) : 0);
   const landed = (q) => goods(q) + travelCost(q);
@@ -231,14 +246,15 @@ function renderItem(id, qty) {
     if (!usable(q.faction)) continue;
     const t = tr && tr[q.faction];
     const notes = [];
-    if (qty > 1 && q.stock && q.bought < qty) notes.push(`only ${q.stock.toLocaleString()} listed`);
+    if (q.faction === "vendor") { if (q.lot > 1) notes.push(`sold in ${q.lot}s`); }
+    else if (qty > 1 && q.stock && q.bought < qty) notes.push(`only ${q.stock.toLocaleString()} listed`);
     else if (qty > 1 && q.bought > qty) notes.push(`${q.bought} in whole stacks`);
     html += `<div class="house ${q === best ? "best" : ""} ${q.stock ? "" : "none"}">
       <div class="name">${HOUSE[q.faction]}${q === best ? '<span class="badge">★ BEST</span>' : ""}</div>
       <div class="total">${q.stock ? money(tr ? landed(q) : goods(q)) : "none"}</div>
       <div class="sub">${q.stock ? `${qty > 1 ? `${qty} for ${money(q.total)} · ` : ""}lowest ${money(q.lowest)} · market ${money(q.market)}` : "not listed"}</div>
-      <div class="sub r">${q.stock ? `${q.stock.toLocaleString()} in stock` : ""}</div>
-      ${t ? `<div class="sub">${here(t) ? "✓ you're here" : `✈ ${fmtTrip(t)} to ${esc(shortName(t.dest))}`}</div>` : ""}
+      <div class="sub r">${q.faction === "vendor" ? "unlimited" : q.stock ? `${q.stock.toLocaleString()} in stock` : ""}</div>
+      ${q.faction === "vendor" ? `<div class="sub">✓ trade supplies vendors in every town</div>` : t ? `<div class="sub">${here(t) ? "✓ you're here" : `✈ ${fmtTrip(t)} to ${esc(shortName(t.dest))}`}</div>` : ""}
       ${notes.length ? `<div class="sub r">${notes.join(", ")}</div>` : t ? "<div></div>" : ""}
     </div>`;
   }
@@ -248,7 +264,17 @@ function renderItem(id, qty) {
   for (const q of quotes) if (!usable(q.faction) && q.stock && best && goods(q) < goods(best))
     html += `<p class="note">${HOUSE[q.faction]} (enemy faction) has it for ${money(goods(q))}. An alt could buy it there.</p>`;
 
-  if (best) html += verdict(best, cheapest, cands, goods, travelCost, tr);
+  const vq = cands.find((q) => q.faction === "vendor");
+  if (best && vq) {
+    const ah = cands.filter((q) => q.faction !== "vendor");
+    const each = `${money(vq.market)} each${vq.lot > 1 ? `, sold in ${vq.lot}s` : ""}`;
+    if (best === vq) {
+      const a = ah.length ? ah.reduce((x, q) => (goods(q) < goods(x) ? q : x)) : null;
+      html += `<p class="verdict good"><b>Buy from a trade supplies vendor</b> (${each})${a && goods(a) > goods(vq) ? `. That's ${money(goods(a) - goods(vq))} less than the ${HOUSE[a.faction]}` : ""}.</p>`;
+    } else {
+      html += `<p class="note">Vendors sell it too (${each}), but the AH is cheaper right now.</p>` + verdict(best, cheapest, ah, goods, travelCost, tr);
+    }
+  } else if (best) html += verdict(best, cheapest, cands, goods, travelCost, tr);
   if (it.vendor && best && best.lowest < it.vendor) html += `<p class="note warn">Listed below vendor price (${money(it.vendor)}): buy and vendor it for profit.</p>`;
   if (tr && r) html += `<p class="note">Totals include your time at ${S.timeValue}g/hour.</p>`;
   $("#result").innerHTML = html + "</div>";
@@ -306,7 +332,7 @@ const location_href = () => window.location.href.split("#")[0];
 // ---------- buy list ----------
 function combos(arr) {
   const out = [];
-  for (let m = 1; m < 1 << arr.length; m++) out.push(arr.filter((_, i) => m & (1 << i)));
+  for (let m = 0; m < 1 << arr.length; m++) out.push(arr.filter((_, i) => m & (1 << i))); // m=0: vendors only
   return out;
 }
 
@@ -314,13 +340,16 @@ function allocate(wanted, houses) {
   const purchases = [], short = {};
   for (const [id, qty] of Object.entries(wanted)) {
     const ls = [];
-    for (const h of houses) { const b = book(id, h); for (let i = 0; i < b.length; i += 3) ls.push([b[i], b[i + 1], b[i + 2], h]); }
+    // [unit, units per entry, entries, house, cost per entry]
+    for (const h of houses) { const b = book(id, h); for (let i = 0; i < b.length; i += 3) ls.push([b[i], b[i + 1], b[i + 2], h, b[i] * b[i + 1]]); }
+    const v = D.vendor[id];
+    if (v) ls.push([v[0] / v[1], v[1], Math.ceil(qty / v[1]), "vendor", v[0]]);
     ls.sort((a, b) => a[0] - b[0]);
     const per = {};
     let got = 0;
-    outer: for (const [u, q, n, h] of ls) for (let k = 0; k < n; k++) {
+    outer: for (const [, q, n, h, cost] of ls) for (let k = 0; k < n; k++) {
       if (got >= qty) break outer;
-      per[h] = per[h] || [0, 0]; per[h][0] += q; per[h][1] += u * q; got += q;
+      per[h] = per[h] || [0, 0]; per[h][0] += q; per[h][1] += cost; got += q;
     }
     for (const [h, [units, cost]] of Object.entries(per)) purchases.push({ id: +id, house: h, units, cost });
     if (got < qty) short[id] = qty - got;
@@ -363,9 +392,9 @@ function renderList() {
   if (plans.length) {
     const p = plans[0], r = rate();
     html += `<div class="card"><div class="item-title"><h2>Cheapest plan</h2><b>${money(p.total)}</b></div>`;
-    const order = p.trip ? Object.keys(p.trip.stops) : p.houses;
+    const order = (p.purchases.some((x) => x.house === "vendor") ? ["vendor"] : []).concat(p.trip ? Object.keys(p.trip.stops) : p.houses);
     for (const h of order) {
-      const at = p.trip ? ` · ${esc(shortName(p.trip.stops[h]))}` : "";
+      const at = h === "vendor" ? " · any town" : p.trip ? ` · ${esc(shortName(p.trip.stops[h]))}` : "";
       html += `<div class="stop"><h3>${HOUSE[h]}${at}</h3>`;
       for (const x of p.purchases.filter((x) => x.house === h)) {
         const it = item(x.id);
@@ -379,7 +408,7 @@ function renderList() {
     html += `<p class="note">Goods ${money(p.goods)}${p.trip && !here(p.trip) ? ` + travel ${fmtTrip(p.trip)}` : ""}${p.trip && r ? ` + time ${money(tripTotal(p.trip, r) - p.trip.cost)}` : ""} = <b>${money(p.total)}</b></p>`;
     if (p.trip && !here(p.trip)) {
       const local = plans.find((x) => x.trip && here(x.trip) && x.missing === p.missing);
-      if (local) html += `<p class="verdict good"><b>The trip is worth it.</b> It saves <b>${money(local.total - p.total)}</b> compared with buying everything at the ${local.houses.map((h) => HOUSE[h]).join(" + ")}.</p>`;
+      if (local) html += `<p class="verdict good"><b>The trip is worth it.</b> It saves <b>${money(local.total - p.total)}</b> compared with buying everything at the ${local.houses.map((h) => HOUSE[h]).join(" + ") || "vendors"}.</p>`;
       html += `<p class="route">Route: ${esc(routeText(p.trip))}</p>`;
     } else if (p.trip) {
       html += `<p class="verdict good"><b>Buy it all here in ${esc(shortName(myLoc()))}.</b></p>`;
@@ -387,7 +416,7 @@ function renderList() {
     if (plans.length > 1) {
       html += `<div class="alts">Other options:`;
       for (const o of plans.slice(1, 4))
-        html += `<div><span>${o.houses.map((h) => HOUSE[h]).join(" + ")}${o.missing > p.missing ? ` (${o.missing} short)` : ""}</span><span>${o.total >= p.total ? "+" : ""}${money(o.total - p.total, true)}</span></div>`;
+        html += `<div><span>${o.houses.map((h) => HOUSE[h]).join(" + ") || "Vendors only"}${o.missing > p.missing ? ` (${o.missing} short)` : ""}</span><span>${o.total >= p.total ? "+" : ""}${money(o.total - p.total, true)}</span></div>`;
       html += `</div>`;
     }
     html += `</div>`;
@@ -507,8 +536,8 @@ async function applyHash() {
 
 async function init() {
   try {
-    const [meta, items, travel] = await Promise.all([getJSON("data/meta.json"), getJSON("data/items.json"), getJSON("data/travel.json")]);
-    D.meta = meta; D.travel = travel;
+    const [meta, items, travel, vend] = await Promise.all([getJSON("data/meta.json"), getJSON("data/items.json"), getJSON("data/travel.json"), getJSON("data/vendor.json").catch(() => ({}))]);
+    D.meta = meta; D.travel = travel; D.vendor = vend;
     for (const [id, [name, q, vendor, n]] of Object.entries(items)) D.items.set(+id, { id: +id, name, q, vendor, n });
     D.fuse = new Fuse([...D.items.values()], { keys: ["name"], includeScore: true, threshold: 0.42, ignoreLocation: true, minMatchCharLength: 2 });
     if (!meta.rulesets.some((r) => r.id === S.ruleset)) S.ruleset = meta.rulesets[0].id;

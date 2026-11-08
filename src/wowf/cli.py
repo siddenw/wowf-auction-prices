@@ -32,13 +32,14 @@ from .config import (
     FACTIONS, MARKET_LABELS, MARKETS, REGION_MARKETS, REGIONS, Settings,
     normalise_faction, normalise_region, normalise_ruleset,
 )
-from . import buylist
+from . import buylist, vendor
 from . import travel as travel_mod
 from .market import SELLER_CUT, Market, Quote
 
 console = Console(highlight=False)
 REFRESH_AFTER = 300  # seconds before re-checking Blizzard for new hourly data
-HOUSE_LABEL = {"alliance": "Alliance AH", "horde": "Horde AH", "blackwater": "Blackwater (neutral)"}
+HOUSE_LABEL = {"alliance": "Alliance AH", "horde": "Horde AH", "blackwater": "Blackwater (neutral)", "vendor": "Vendor"}
+VENDOR_STOCK = 10**9  # vendors never run out
 QTY_RE = [re.compile(r"^(\d+)\s*x?\s+(.+)$", re.I), re.compile(r"^(.+?)\s+x\s*(\d+)$", re.I)]
 
 
@@ -51,6 +52,21 @@ def parse_qty(text: str) -> tuple[int, str]:
     if m:
         return max(1, int(m.group(2))), m.group(1)
     return 1, text
+
+
+def vendor_quote(item_id: int, qty: int) -> Quote | None:
+    """A Quote for buying from an NPC vendor, or None if vendors don't sell it."""
+    v = vendor.get(item_id)
+    if v is None:
+        return None
+    total, bought = v.cost(qty)
+    return Quote("vendor", round(v.unit), VENDOR_STOCK, 0, total, bought, round(v.unit), 0)
+
+
+def all_quotes(m: Market, item_id: int, qty: int = 1) -> list[Quote]:
+    quotes = m.quotes(item_id, qty)
+    vq = vendor_quote(item_id, qty)
+    return quotes + [vq] if vq else quotes
 
 
 def fmt_trip(trip) -> str:
@@ -176,10 +192,10 @@ class App:
         for col, just in (("Item", "left"), ("Want", "right"), ("Buy at", "left"), ("Units", "right"),
                           ("Cost", "right"), ("Each", "right")):
             t.add_column(col, justify=just)
-        order = list(best.trip.stops) if best.trip else list(best.houses)
         by_house = best.by_house()
+        order = (["vendor"] if "vendor" in by_house else []) + (list(best.trip.stops) if best.trip else list(best.houses))
         for h in order:
-            where = h.capitalize()
+            where = "Vendor" if h == "vendor" else h.capitalize()
             if best.trip and best.trip.stops.get(h) is not None:
                 where += f" · {travel_mod.short_name(best.trip.stops[h])}"
             for p in by_house.get(h, []):
@@ -214,7 +230,7 @@ class App:
             if local:
                 saved = local[0].total - best.total
                 console.print(f"  [green]The trip is worth it:[/] saves [bold]{money.fmt(saved)}[/] vs buying "
-                              f"everything at {' + '.join(HOUSE_LABEL[h] for h in local[0].houses)}.")
+                              f"everything at {' + '.join(HOUSE_LABEL[h] for h in local[0].houses) or 'vendors'}.")
             console.print(f"  [dim]Route: {' > '.join(travel_mod.short_name(n) for n in best.trip.via)}"
                           f"{' (round trip)' if s.round_trip else ', then hearth back'}[/]")
         elif best.trip:
@@ -225,7 +241,7 @@ class App:
             for p in plans[1:4]:
                 diff = p.total - best.total
                 extra = f", {sum(p.short.values())} short" if sum(p.short.values()) > sum(best.short.values()) else ""
-                console.print(f"  [dim]  {' + '.join(HOUSE_LABEL[h] for h in p.houses):40} {money.fmt(p.total, rich=False):>14}"
+                console.print(f"  [dim]  {' + '.join(HOUSE_LABEL[h] for h in p.houses) or 'Vendors only':40} {money.fmt(p.total, rich=False):>14}"
                               f"  (+{money.fmt(diff, rich=False)}{extra}){'  · ' + trip_txt(p).replace('[green]', '').replace('[/]', '') if p.trip else ''}[/]")
         console.print(f"  [dim]{self.freshness()}[/]")
 
@@ -251,7 +267,7 @@ class App:
 
     def usable(self, faction: str) -> bool:
         mine = self.settings.faction
-        return mine is None or faction in (mine, "blackwater")
+        return mine is None or faction in (mine, "blackwater", "vendor")
 
     # -- actions ------------------------------------------------------------
     def resolve(self, query: str) -> tuple[Item | None, list[Item]]:
@@ -275,7 +291,7 @@ class App:
 
     def show_item(self, item: Item, qty: int) -> None:
         m = self.market
-        quotes = m.quotes(item.id, qty)
+        quotes = all_quotes(m, item.id, qty)
         title = Text.assemble((item.name, f"bold {item.style}"), (f"  #{item.id}", "dim"))
         if qty > 1:
             title.append(f"  ×{qty}", "bold")
@@ -288,6 +304,8 @@ class App:
             return
 
         trips = self.trips()
+        if trips is not None:  # vendors are in every town: no travel
+            trips = {**trips, "vendor": travel_mod.Trip(0, 0, self.location(), [self.location()])}
         rate = self.settings.time_value
 
         def goods(q: Quote) -> float:
@@ -334,7 +352,7 @@ class App:
                 notes.append(f"{q.bid_only} bid-only")
             if qty > 1 and q.stock and q.bought < qty:
                 notes.append(f"only {q.stock}")
-            elif qty > 1 and q.bought > qty:
+            elif qty > 1 and q.bought > qty and q.faction != "vendor":
                 notes.append(f"{q.bought} in stacks")
             row = [
                 "[green]★[/]" if q is best else "",
@@ -344,7 +362,13 @@ class App:
             ]
             if qty > 1:
                 row.append(money.fmt(q.total))
-            row.append(f"{q.stock:,}" if q.stock else "[dim]none[/]")
+            if q.faction == "vendor":
+                row.append("unlimited")
+                lot = vendor.get(item.id).lot
+                if lot > 1:
+                    notes.append(f"sold in {lot}s")
+            else:
+                row.append(f"{q.stock:,}" if q.stock else "[dim]none[/]")
             if trips:
                 if not usable:
                     row += ["", ""]
@@ -362,13 +386,27 @@ class App:
             console.print(f"  [dim]Total includes your time at {money.fmt(self.settings.time_value)}/h.[/]")
 
         if best is not None:
-            self._verdict(best, cheapest, candidates, goods, travel, trips, qty)
+            self._verdict(best, cheapest, candidates, goods, travel, trips, qty, item.id)
         if item.vendor and best is not None and best.lowest is not None and best.lowest < item.vendor:
             console.print(f"  [yellow]Cheaper than vendor price ({money.fmt(item.vendor)})[/]: buy and vendor it for profit.")
         console.print(f"  [dim]{self.freshness()}[/]")
 
-    def _verdict(self, best, cheapest, candidates, goods, travel, trips, qty) -> None:
+    def _verdict(self, best, cheapest, candidates, goods, travel, trips, qty, item_id: int) -> None:
         here = HOUSE_LABEL[best.faction]
+        vq = next((q for q in candidates if q.faction == "vendor"), None)
+        if vq is not None:
+            v = vendor.get(item_id)
+            ah = [q for q in candidates if q.faction != "vendor"]
+            each = f"{money.fmt(v.unit)} each" + (f", sold in {v.lot}s" if v.lot > 1 else "")
+            if best is vq:
+                msg = f"  [green]Buy from a trade-supplies vendor[/] ({each})"
+                if ah:
+                    a = min(ah, key=goods)
+                    if goods(a) > goods(vq):
+                        msg += f": {money.fmt(goods(a) - goods(vq))} cheaper than the {HOUSE_LABEL[a.faction]}"
+                console.print(msg + ".")
+                return
+            console.print(f"  [dim]Vendors sell it too ({each}), but the AH is cheaper right now.[/]")
         if not trips:
             others = [q for q in candidates if q is not best]
             msg = f"  [green]Best: {here}[/]"
@@ -429,13 +467,13 @@ class App:
         for col, just in (("ID", "right"), ("Item", "left"), ("Cheapest", "right"), ("Where", "left"), ("Stock", "right")):
             t.add_column(col, justify=just)
         for it in hits:
-            quotes = [q for q in m.quotes(it.id) if q.stock and self.usable(q.faction)]
+            quotes = [q for q in all_quotes(m, it.id) if q.stock and self.usable(q.faction)]
             best = min(quotes, key=lambda q: q.lowest, default=None)
             t.add_row(
                 str(it.id), f"[{it.style}]{it.name}[/]",
                 money.fmt(best.lowest) if best else "[dim]-[/]",
                 HOUSE_LABEL[best.faction] if best else "[dim]not listed[/]",
-                f"{sum(q.stock for q in quotes):,}" if quotes else "",
+                ("unlimited" if any(q.faction == "vendor" for q in quotes) else f"{sum(q.stock for q in quotes):,}") if quotes else "",
             )
         console.print(t)
 
@@ -568,7 +606,7 @@ def shell(app: App) -> None:
             for it in app.catalog.search(query, limit=10, listed=listed):
                 meta = ""
                 if m:
-                    lows = [q.lowest for q in m.quotes(it.id) if q.lowest and app.usable(q.faction)]
+                    lows = [q.lowest for q in all_quotes(m, it.id) if q.lowest and app.usable(q.faction)]
                     meta = money.fmt(min(lows), rich=False) if lows else "not listed"
                 yield Completion(
                     it.name, -len(query), display=it.name, display_meta=meta,

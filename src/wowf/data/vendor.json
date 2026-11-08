@@ -1,0 +1,152 @@
+{
+ "2320": {
+  "name": "Coarse Thread",
+  "price": 10,
+  "lot": 1
+ },
+ "2321": {
+  "name": "Fine Thread",
+  "price": 100,
+  "lot": 1
+ },
+ "4291": {
+  "name": "Silken Thread",
+  "price": 500,
+  "lot": 1
+ },
+ "8343": {
+  "name": "Heavy Silken Thread",
+  "price": 2000,
+  "lot": 1
+ },
+ "14341": {
+  "name": "Rune Thread",
+  "price": 5000,
+  "lot": 1
+ },
+ "2604": {
+  "name": "Red Dye",
+  "price": 50,
+  "lot": 1
+ },
+ "6260": {
+  "name": "Blue Dye",
+  "price": 50,
+  "lot": 1
+ },
+ "4340": {
+  "name": "Gray Dye",
+  "price": 350,
+  "lot": 1
+ },
+ "2605": {
+  "name": "Green Dye",
+  "price": 100,
+  "lot": 1
+ },
+ "2325": {
+  "name": "Black Dye",
+  "price": 1000,
+  "lot": 1
+ },
+ "6261": {
+  "name": "Orange Dye",
+  "price": 1000,
+  "lot": 1
+ },
+ "4342": {
+  "name": "Purple Dye",
+  "price": 2500,
+  "lot": 1
+ },
+ "4341": {
+  "name": "Yellow Dye",
+  "price": 500,
+  "lot": 1
+ },
+ "10290": {
+  "name": "Pink Dye",
+  "price": 2500,
+  "lot": 1
+ },
+ "2324": {
+  "name": "Bleach",
+  "price": 25,
+  "lot": 1
+ },
+ "4289": {
+  "name": "Salt",
+  "price": 50,
+  "lot": 1
+ },
+ "3371": {
+  "name": "Empty Vial",
+  "price": 20,
+  "lot": 5
+ },
+ "3372": {
+  "name": "Leaded Vial",
+  "price": 200,
+  "lot": 5
+ },
+ "8925": {
+  "name": "Crystal Vial",
+  "price": 2500,
+  "lot": 5
+ },
+ "18256": {
+  "name": "Imbued Vial",
+  "price": 30000,
+  "lot": 5
+ },
+ "2678": {
+  "name": "Mild Spices",
+  "price": 10,
+  "lot": 5
+ },
+ "2692": {
+  "name": "Hot Spices",
+  "price": 40,
+  "lot": 1
+ },
+ "3713": {
+  "name": "Soothing Spices",
+  "price": 160,
+  "lot": 1
+ },
+ "159": {
+  "name": "Refreshing Spring Water",
+  "price": 25,
+  "lot": 5
+ },
+ "1179": {
+  "name": "Ice Cold Milk",
+  "price": 125,
+  "lot": 5
+ },
+ "2880": {
+  "name": "Weak Flux",
+  "price": 100,
+  "lot": 1
+ },
+ "3466": {
+  "name": "Strong Flux",
+  "price": 2000,
+  "lot": 1
+ },
+ "6217": {
+  "name": "Copper Rod",
+  "price": 124,
+  "lot": 1
+ },
+ "4470": {
+  "name": "Simple Wood",
+  "price": 38,
+  "lot": 1
+ },
+ "4399": {
+  "name": "Wooden Stock",
+  "price": 200,
+  "lot": 1
+ }
+}

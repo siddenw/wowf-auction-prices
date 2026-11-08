@@ -93,6 +93,12 @@ Black Pearl               1    Blackwater · Booty Bay      1           50s     
 
 Lists are saved to `~/.config/wowf/lists.json`.
 
+### Vendor reagents
+
+Trade-supplies reagents (threads, dyes, vials, salt, spices, flux, rods, wood) also show a **Vendor** row, with the vendor price and no travel. Vendors are in every town and never run out. Some sell in lots: Empty Vials come 5 for 20c, so 7 vials means buying 10. The verdict says whether the vendor or the AH is cheaper, and buy lists use whichever wins for each unit.
+
+The Blizzard API sets a vendor buy price on every item, drops included, so it can't tell which items vendors actually sell. The list is curated in `scripts/build_vendor.py`, and prices come from the API. Regenerate it with `uv run python scripts/build_vendor.py`.
+
 **Columns:**
 - **Lowest** is the cheapest single unit.
 - **Market** is the mean of the cheapest 15% of stock, so one cheap listing doesn't skew it.
